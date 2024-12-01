@@ -304,5 +304,267 @@ pc2 | SUCCESS => {
 
 ## - Supervision avec Nagios
 
+Dans cette partie, le but est de surveiller les machines à l'aide de Nagios qui a été pré-installé sur la machine ops.
+
+Je dois donc créer un fichier pc.cfg dans etc/nagios4/objects pour toutes les machines de l'inventaire au format suivant : 
+
+```cfg
+define host{
+ use linux-server
+ host_name pc1
+ check_interval 1
+ }
+ ```
+
+ Pour ce faire, j'ai repris mon script précédent afin qu'il soit capable de génerer le fichier cfg pour toutes les machines.
+
+ J'ai créé donc le script suivant :
+
+ ```bash
+ #!/bin/sh
+
+USER="glpi"
+PASSWORD="tprli"
+APPTOKEN="utIjN6j9JMsPiaqsfUOFd4xyH5H4OsTlMICriKnZ"
+APIURL="http://192.168.57.98/glpi/apirest.php"
+
+# 1- Authentification
+AUTH_TOKEN=$(echo -n "$USER:$PASSWORD" | base64)
+
+response=$(curl -s -w "%{http_code}" -o response.json -X GET "$APIURL/initSession" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Basic $AUTH_TOKEN" \
+  -H "App-Token: $APPTOKEN")
+
+if [ "$response" -eq 200 ]; then
+  session_token=$(jq -r '.session_token' response.json)
+else
+  echo "Erreur d'authentification : $response"
+  exit 1
+fi
+
+# 2- Requete pour récupérer les ordinateurs
+response=$(curl -s -w "%{http_code}" -o response.json -X GET "$APIURL/Computer" \
+  -H "Content-Type: application/json" \
+  -H "Session-Token: $session_token" \
+  -H "App-Token: $APPTOKEN")
+
+if [ "$response" -eq 200 ]; then
+  computers=$(jq -r '.[].name' response.json)
+  
+  inventory="{\"all\": {\"hosts\": ["
+  
+  first=1
+  for computer in $computers; do
+    if [ $first -eq 1 ]; then
+      first=0
+    else
+      inventory="$inventory,"
+    fi
+    inventory="$inventory\"$computer\""
+
+    # 3- Création du fichier de configuration Nagios pour chaque machine
+    config_file="/etc/nagios4/objects/pc.cfg"
+
+    echo "define host{" >> "$config_file"
+    echo "    use linux-server" >> "$config_file"
+    echo "    host_name $computer" >> "$config_file"
+    echo "    check_interval 1" >> "$config_file"
+    echo "}" >> "$config_file"
+    
+  done
+
+  inventory="$inventory]}}"
+  
+  echo "$inventory" | jq .
+else
+  echo "Erreur de récupération des ordinateurs : $response"
+  exit 1
+fi
+```
+
+Ce script créé le fichier pc.cfg dans le /etc/nagios4/objects, le fichier contient donc toutes les machines.
+
+![alt text](image-5.png)
 
 
+Ensuite, j'ai activé le fichier créé par le script (pc.cfg) en l'ajoutant dans les fichiers de configuration chargés par Nagios.
+
+![alt text](image-6.png)
+
+J'ai ajouté les lignes suivantes dans le fichier /etc/nagios4/nagios.cfg  : 
+
+```bash
+#Definitions for monitoring our pcs 
+cfg_file=/etc/nagios4/objects/pc.cfg
+```
+
+Ensuite, j'ai relancé le service nagios, avec la commande suivante :
+
+```bash
+sudo systemctl restart nagios4
+```
+
+On peut voir que les machines sont visibles sur la liste des hosts de l'interface de Nagios.
+
+![alt text](image-7.png)
+
+Afin de vérifier si la détection de changement d'état dans Nagios se passe bien, j'ai arrête les machines suivantes : pc2 et pc3.
+
+```bash
+root@deb:~# lxc-ls --running
+dhcp fw1  ns   ops  pc1  pc2  pc3  srv3 
+root@deb:~# lxc-stop pc3
+root@deb:~# lxc-stop pc2
+root@deb:~# lxc-ls --running
+dhcp fw1  ns   ops  pc1  srv3 
+```
+
+![alt text](image-8.png)
+
+Depuis l'interface de Nagios, on peut voir que les machines pc2 et pc3 sont détectées comme DOWN.
+
+![alt text](image-9.png)
+
+J'ai relancé ces deux machines et on peut voir qu'elles sont à nouveau détectées comme ON:
+
+```bash
+root@deb:~# lxc-start pc3
+root@deb:~# lxc-start pc2
+root@deb:~# lxc-ls --running
+dhcp fw1  ns   ops  pc1  pc2  pc3  srv3 
+```
+
+![alt text](image-10.png)
+
+## - Check Nagios
+
+Dans cette partie, on doit ajouter un service permettant de vérifier si SMTP fonctionne sur localhost, la machine ops, à l'aide de la commande check_smtp.
+
+Afin de faire cela, j'ai ajouté une commande dans le fichier de configuration des commandes Nagios (/etc/nagios4/objects/commands.cfg)  : 
+
+```bash
+define command{
+	command_name check_smtp
+	command_line /usr/lib/nagios/plugins/check_smtp -H $HOSTADRESS$$
+}
+```
+
+![alt text](image-11.png)
+
+En fait, pour superviser un élément sur une machine, il faut créer plusieurs objects dans Nagios. La commande a été créée, il reste à créer un host et un service.
+
+Pour la création d'un host, on l'ajoute dans /etc/nagios4/objects/localhost.cfg. 
+
+```bash
+define host{
+        use                     linux-server            ; Name of host template to use
+                                                        ; This host definition will inherit all variables that are defined
+                                                        ; in (or inherited by) the linux-server host template definition.
+        host_name               localhost
+        alias                   localhost
+        address                 127.0.0.1
+        check_interval          1
+        }
+```
+
+Le host existait déjà, j'ai ajouté uniquement l'interval de vérification de 1.
+
+Maintenant, le dernier object consiste à ajouter un servicer pour superviser le port SMTP de la machine ops. Celui ci sera fait aussi dans le fichier localhost.cfg qui se trouve dans /etc/nagios4/objects/localhost.cfg
+
+```bash
+# Define a service to check SMTP on the local machine
+
+define service{
+        use                             local-service
+        service_description             Verify if SMTP is responding
+        host_name                       localhost
+        check_interval                  1
+        check_command                   check_smtp
+}
+```
+
+J'ai vérifié que la configuration de Nagios était correcte, cependant il y a eu une erreur, j'ai nommé ma commande comme check_smtp, or il y a déjà une commande avec ce nom, je l'ai donc renomée en smtp-active
+
+```bash
+define command{
+        command_name smtp-active
+        command_line /usr/lib/nagios/plugins/check_smtp -H $HOSTADRESS$$
+}
+```
+
+J'ai changé aussi le service :
+
+```bash
+# Define a service to check SMTP on the local machine
+
+define service{
+        use                             generic-service
+        service_description             Verify if SMTP is responding
+        host_name                       localhost
+        check_interval                  1
+        check_command                   smtp-active
+}
+
+```
+
+J'ai vérifié à nouveau la configuration de nagios, avec la commande suivante :
+
+```bash
+sudo nagios4 -v /etc/nagios4/nagios.cfg
+```
+
+Tout marchait correctement, ensuite j'ai rédémarré le service Nagios pour que les modifications de la configuration soient appliquées.
+
+Sur l'interface de Nagios, le service SMTP ne fonctionne pas parce que j'avais mal saisir la command line pour ma commande, j'ai écrit HOSTADDRESS avec un seul D.
+
+![alt text](image-12.png)
+
+
+
+```bash
+define command{
+        command_name smtp-active
+        command_line /usr/lib/nagios/plugins/check_smtp -H $HOSTADDRESS$
+}
+```
+
+Après avoir corrigé cela et relancé le service Nagios, j'ai pu vérifier si SMTP marchait depuis l'interface.
+
+![alt text](image-13.png)
+
+![alt text](image-14.png)
+
+
+## - SNMP
+
+Dans cette partie, je vais configurer SNMP sur chaque machine via ansilbe afin de vérifier l'état des machines.
+Tout d'abord je vais déployer l'agent SNMP pour chaque pc via ansible et l'inventaire dynamique.
+
+```bash 
+- name: Déployer l'agent SNMP
+  hosts: pcs
+  become: true
+  tasks:
+  - name: Installer le daemon SNMP
+    apt: 
+     name: snmpd
+     state: present
+
+  - name: Mettre l'agent à l'écoute sur toutes les interfaces
+    lineinfile: 
+      path: /etc/snmp/snmpd.conf
+      regexp: '^agentAddress'
+      line: 'agentAddress udp:161,udp6[::1]:161'
+ 
+  - name: Mettre la communité example
+    lineinfile: 
+      path: /etc/snmp/snmpd.conf
+      regexp: '^rocommunity'
+      line: 'rocommunity example'
+ 
+  - name: Redémarrer l'agent SNMPD
+    service:
+      name: snmpd
+      state: restarted
+```

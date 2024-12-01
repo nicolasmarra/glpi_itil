@@ -20,7 +20,7 @@ else
   exit 1
 fi
 
-# 2- Récupérer la liste des ordinateurs
+# 2- Requete pour récupérer les ordinateurs
 response=$(curl -s -w "%{http_code}" -o response.json -X GET "$APIURL/Computer" \
   -H "Content-Type: application/json" \
   -H "Session-Token: $session_token" \
@@ -39,6 +39,16 @@ if [ "$response" -eq 200 ]; then
       inventory="$inventory,"
     fi
     inventory="$inventory\"$computer\""
+
+    # 3- Création du fichier de configuration Nagios pour chaque machine
+    config_file="/etc/nagios4/objects/pc.cfg"
+
+    echo "define host{" >> "$config_file"
+    echo "    use linux-server" >> "$config_file"
+    echo "    host_name $computer" >> "$config_file"
+    echo "    check_interval 1" >> "$config_file"
+    echo "}" >> "$config_file"
+    
   done
 
   inventory="$inventory]}}"
