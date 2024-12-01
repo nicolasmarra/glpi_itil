@@ -1,0 +1,53 @@
+- name: Déployer l'agent FusionInventory
+  hosts: all
+  become: true
+  tasks:
+  - name: Mettre à jour le système de chaque pc
+    command: apt update --allow-releaseinfo-change
+    
+  - name: Installer le paquet FusionInventory-agent
+    package:
+      name: fusioninventory-agent
+      state: present
+  - name: Configurer l'agent FusionInventory
+    lineinfile:
+     path: /etc/fusioninventory/agent.cfg
+     regex: '^server'
+     line: 'server = http://192.168.57.98/glpi/plugins/fusioninventory/'
+  - name: Exécuter l'agent FusionInventory
+    command: fusioninventory-agent
+
+  - name: Installer le daemon SNMP
+    apt: 
+     name: snmpd
+     state: present
+
+  - name: Mettre l'agent à l'écoute sur toutes les interfaces (IPv4 uniquement)
+    lineinfile: 
+      path: /etc/snmp/snmpd.conf
+      regexp: '^agentAddress'
+      line: 'agentAddress udp:161'
+ 
+  - name: Mettre la communité example
+    lineinfile: 
+      path: /etc/snmp/snmpd.conf
+      regexp: '^rocommunity'
+      line: 'rocommunity example'
+ 
+  - name: Détecter les processus sleep
+    copy:
+      dest: /etc/snmp/snmpd.conf
+      content: |
+        agentAddress udp:0.0.0.0:161
+        rocommunity example default
+        proc sleep
+      owner: root
+      group: root
+      mode: '0644'
+
+  - name: Redémarrer l'agent SNMPD
+    service:
+      name: snmpd
+      state: restarted
+      
+
