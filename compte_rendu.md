@@ -833,11 +833,12 @@ Ensuite, j'ai ajouté un service dans le même fichier :
 
 ```bash
 define service{
-        use                             generic-service
-        hostgroup_name                  pcs
-        service_description             Sleep Process Check
-        check_command                   check-snmp-processes!example!sleep!10
+	use                             generic-service
+	hostgroup_name			            pcs
+	service_description		          Sleep Process Check
+	check_command			              check-snmp-processes!example!1!10
 }
+
 ```
 
 Ensuite j'ai défini la commande check_snmp_processes sur /etc/nagios4/objects/commands.cfg
@@ -845,11 +846,9 @@ Ensuite j'ai défini la commande check_snmp_processes sur /etc/nagios4/objects/c
 
 
 ```bash
-define service{
-        use                             generic-service
-        hostgroup_name                  pcs
-        service_description             Sleep Process Check
-        check_command                   check_snmp_processes!example!sleep!10
+define command{
+        command_name check-snmp-processes
+        command_line $USER1$/check_snmp -H $HOSTADDRESS$ -C $ARG1$ -o UCD-SNMP-MIB::prCount.$ARG2$ -w $ARG3$
 }
 ```
 
@@ -868,3 +867,54 @@ sudo systemctl restart nagios4
 On vérifie sur l'interface si tout marche : 
 
 ![alt text](image-18.png)
+
+![alt text](image-19.png)
+
+Pour vérifier que tout marche bien;
+
+j'ai lancé la commande sleep sur la machine pc1 15 fois.
+
+```bash
+for i in {1..15}; do sleep 1000 & done
+[1] 19888
+[2] 19889
+[3] 19890
+[4] 19891
+[5] 19892
+[6] 19893
+[7] 19894
+[8] 19895
+[9] 19896
+[10] 19897
+[11] 19898
+[12] 19899
+[13] 19900
+[14] 19901
+[15] 19902
+```
+
+on a utilisé la commande snmpwaalk pour consulter sur la machine ops: 
+
+```bash
+snmpwalk -v2c -c example pc1 UCD-SNMP-MIB::prTable
+UCD-SNMP-MIB::prIndex.1 = INTEGER: 1
+UCD-SNMP-MIB::prNames.1 = STRING: sleep
+UCD-SNMP-MIB::prMin.1 = INTEGER: 1
+UCD-SNMP-MIB::prMax.1 = INTEGER: 0
+UCD-SNMP-MIB::prCount.1 = INTEGER: 16
+UCD-SNMP-MIB::prErrorFlag.1 = INTEGER: noError(0)
+UCD-SNMP-MIB::prErrMessage.1 = STRING: 
+UCD-SNMP-MIB::prErrFix.1 = INTEGER: noError(0)
+UCD-SNMP-MIB::prErrFixCmd.1 = STRING:
+```
+
+On voit que le compteur est à 16
+
+J'ai dû changer le service et ajouter un check_interval de 1 pour que cela fasse une verification toutes les minutes.
+
+On voit donc que l'alerte a été déclenchée pour la macine pc1 
+
+![alt text](image-20.png)
+
+![alt text](image-21.png)
+
