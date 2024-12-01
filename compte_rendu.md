@@ -568,3 +568,194 @@ Tout d'abord je vais déployer l'agent SNMP pour chaque pc via ansible et l'inve
       name: snmpd
       state: restarted
 ```
+
+J'ai dû modifier la sortie de mon script pour remplacer hosts par pcs.
+
+j'ai remplacé le hosts de mon playbook de pcs par all.
+
+```yml
+- name: Déployer l'agent FusionInventory
+  hosts: pcs
+  become: true
+  tasks:
+  - name: Mettre à jour le système de chaque pc
+    command: apt update --allow-releaseinfo-change
+    
+  - name: Installer le paquet FusionInventory-agent
+    package:
+      name: fusioninventory-agent
+      state: present
+  - name: Configurer l'agent FusionInventory
+    lineinfile:
+     path: /etc/fusioninventory/agent.cfg
+     regex: '^server'
+     line: 'server = http://192.168.57.98/glpi/plugins/fusioninventory/'
+  - name: Exécuter l'agent FusionInventory
+    command: fusioninventory-agent
+
+- name: Déployer l'agent SNMP
+  hosts: pcs
+  become: true
+  tasks:
+  - name: Installer le daemon SNMP
+    apt: 
+     name: snmpd
+     state: present
+
+  - name: Mettre l'agent à l'écoute sur toutes les interfaces
+    lineinfile: 
+      path: /etc/snmp/snmpd.conf
+      regexp: '^agentAddress'
+      line: 'agentAddress udp:161,udp6[::1]:161'
+ 
+  - name: Mettre la communité example
+    lineinfile: 
+      path: /etc/snmp/snmpd.conf
+      regexp: '^rocommunity'
+      line: 'rocommunity example'
+ 
+  - name: Redémarrer l'agent SNMPD
+    service:
+      name: snmpd
+```
+
+J'ai lancé le playbook
+
+```bash
+ansible-playbook -i script_ansible.sh fusioninventory.yml 
+
+PLAY [Déployer l'agent FusionInventory et SNMP] *********************************************************************************
+
+TASK [Gathering Facts] **********************************************************************************************************
+ok: [pc2]
+ok: [pc1]
+ok: [pc3]
+
+TASK [Mettre à jour le système de chaque pc] ************************************************************************************
+changed: [pc1]
+changed: [pc3]
+changed: [pc2]
+
+TASK [Installer le paquet FusionInventory-agent] ********************************************************************************
+ok: [pc3]
+ok: [pc2]
+ok: [pc1]
+
+TASK [Configurer l'agent FusionInventory] ***************************************************************************************
+ok: [pc3]
+ok: [pc2]
+ok: [pc1]
+
+TASK [Exécuter l'agent FusionInventory] *****************************************************************************************
+changed: [pc1]
+changed: [pc3]
+changed: [pc2]
+
+TASK [Installer le daemon SNMP] *************************************************************************************************
+changed: [pc2]
+changed: [pc3]
+changed: [pc1]
+
+TASK [Mettre l'agent à l'écoute sur toutes les interfaces] **********************************************************************
+changed: [pc1]
+changed: [pc2]
+changed: [pc3]
+
+TASK [Mettre la communité example] **********************************************************************************************
+changed: [pc2]
+changed: [pc1]
+changed: [pc3]
+
+TASK [Redémarrer l'agent SNMPD] *************************************************************************************************
+changed: [pc1]
+changed: [pc2]
+changed: [pc3]
+
+PLAY RECAP **********************************************************************************************************************
+pc1                        : ok=9    changed=6    unreachable=0    failed=0   
+pc2                        : ok=9    changed=6    unreachable=0    failed=0   
+pc3                        : ok=9    changed=6    unreachable=0    failed=0   
+```
+
+J'ai vérifie le status de snmp afin de confirmer que tout marche bien, mais il y avait une erreur lié à l'IPV6, j'ai donc enlevé l'écouté sur les interfaces IPV6. 
+
+```bash
+- name: Déployer l'agent FusionInventory et SNMP
+  hosts: all
+  become: true
+  tasks:
+  - name: Mettre à jour le système de chaque pc
+    command: apt update --allow-releaseinfo-change
+    
+  - name: Installer le paquet FusionInventory-agent
+    package:
+      name: fusioninventory-agent
+      state: present
+  - name: Configurer l'agent FusionInventory
+    lineinfile:
+     path: /etc/fusioninventory/agent.cfg
+     regex: '^server'
+     line: 'server = http://192.168.57.98/glpi/plugins/fusioninventory/'
+  - name: Exécuter l'agent FusionInventory
+    command: fusioninventory-agent
+
+  - name: Installer le daemon SNMP
+    apt: 
+     name: snmpd
+     state: present
+
+  - name: Mettre l'agent à l'écoute sur toutes les interfaces (IPv4 uniquement)
+    lineinfile: 
+      path: /etc/snmp/snmpd.conf
+      regexp: '^agentAddress'
+      line: 'agentAddress udp:161'
+ 
+  - name: Mettre la communité example
+    lineinfile: 
+      path: /etc/snmp/snmpd.conf
+      regexp: '^rocommunity'
+      line: 'rocommunity example'
+ 
+  - name: Redémarrer l'agent SNMPD
+    service:
+      name: snmpd
+      state: restarted
+```
+
+En vérifiant le status de snmpd, on voit qu'il est activé sur toutes les machines.
+
+![alt text](image-15.png)
+
+Maintenant, il faut déterminer l'OID numérique complet de la variable hrSystemProcesses (groupe hrSystem) de la MIB 'HOST-RESOURCES-MIB' sur la RFC-2790
+
+L'OID numérique complet de cette variable est le : 1.3.6.1.2.25.1
+
+1.3.6.1 correspond à :
+1 -> ISO
+3 -> org
+6 -> dod
+1 -> internet
+
+Le chemin pour atteindre HOST-RESOURCES-MIB dans l'hiérarchie des OIDS de la MIB est :
+
+1.3.6.1.2.1.25 
+
+ou : 
+
+2 -> mgmt (Management)
+1 -> mib-2 (Management Information Base Version 2)
+25 -> host (Host Resources MIB)
+
+J'ai utilisé la commande suivante pour interroger la variable hrSystemProcesses avec SNMP sur pc1:
+
+```bash
+nmpget -v2c -c public pc1 .1.3.6.1.2.1.25.1.6.0
+HOST-RESOURCES-MIB::hrSystemProcesses.0 = Gauge32: 10
+tprli@ops:~$ snmpget -v2c -c example pc1 .1.3.6.1.2.1.25.1.6.0
+HOST-RESOURCES-MIB::hrSystemProcesses.0 = Gauge32: 10
+```
+
+
+![alt text](image-16.png)
+
+## - Check SNMP dans Nagios
