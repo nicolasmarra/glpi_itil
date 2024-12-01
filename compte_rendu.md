@@ -759,3 +759,112 @@ HOST-RESOURCES-MIB::hrSystemProcesses.0 = Gauge32: 10
 ![alt text](image-16.png)
 
 ## - Check SNMP dans Nagios
+
+Il y a deux étapes à réaliser dans cette partie.
+
+1- Modifier la configuration de l'agent SNMP pour qu'il détecte un processus spécifique (sleep)
+
+Pour ce faire, j'ai ajouté cette tâche à mon playbook pour que l'agent soit à l'écoute sur l'adresse IP 0.0.0.0 sur le port UDP 161, la communauté "example" en lecteur et une directive proc pour le processus sleep. 
+
+```yml
+  - name: Détecter les processus sleep
+    copy:
+      dest: /etc/snmp/snmpd.conf
+      content: |
+        agentAddress udp:0.0.0.0:161
+        rocommunity example default
+        proc sleep
+      owner: root
+      group: root
+```
+
+Après avoir changé mon playbook, j'ai relancé SNMPD avec Ansible.
+
+```bash
+ansible-playbook -i script_ansible.sh fusioninventory.yml 
+```
+
+Je vérifie que cela fonctionne  en interrogeant l'agent SNMP, avec les deux commandes suivantes :
+
+```bash
+snmpwalk -v2c -c example pc1 UCD-SNMP-MIB::prTable
+snmptable -v2c -c example pc1 UCD-SNMP-MIB::prTable
+```
+
+```bash
+nmpwalk -v2c -c example pc1 UCD-SNMP-MIB::prTable
+UCD-SNMP-MIB::prIndex.1 = INTEGER: 1
+UCD-SNMP-MIB::prNames.1 = STRING: sleep
+UCD-SNMP-MIB::prMin.1 = INTEGER: 1
+UCD-SNMP-MIB::prMax.1 = INTEGER: 0
+UCD-SNMP-MIB::prCount.1 = INTEGER: 1
+UCD-SNMP-MIB::prErrorFlag.1 = INTEGER: noError(0)
+UCD-SNMP-MIB::prErrMessage.1 = STRING: 
+UCD-SNMP-MIB::prErrFix.1 = INTEGER: noError(0)
+UCD-SNMP-MIB::prErrFixCmd.1 = STRING: 
+tprli@ops:~$ snmptable -v2c -c example pc1 UCD-SNMP-MIB::prTable
+SNMP table: UCD-SNMP-MIB::prTable
+
+ prIndex prNames prMin prMax prCount prErrorFlag prErrMessage prErrFix prErrFixCmd
+       1   sleep     1     0       1     noError               noError
+```
+
+![alt text](image-17.png)
+
+Ces résultats montrent que la configuration est fonctionnelle. 
+
+2- Créer un service de supervision
+
+Pour cette partie, il faut créer une commande , un service et un hostgroup dans Nagios afin de vérifier le nombre d'occurence, le seuil d'alerte est de 10 occurences du processus sleep.
+Une alerte doit être déclencher artificiellement en lançant sur un pc des processus "sleep" en tâche de fond.
+
+
+D'abord, j'ai ajouté un hostgroup dans le fichier /etc/nagios4/objects/localhost.cfg
+
+```bash
+define hostgroup{
+        hostgroup_name pcs
+        alias           All PCs
+        members         pc1, pc2, pc3
+}
+```
+
+Ensuite, j'ai ajouté un service dans le même fichier :
+
+```bash
+define service{
+        use                             generic-service
+        hostgroup_name                  pcs
+        service_description             Sleep Process Check
+        check_command                   check-snmp-processes!example!sleep!10
+}
+```
+
+Ensuite j'ai défini la commande check_snmp_processes sur /etc/nagios4/objects/commands.cfg
+
+
+
+```bash
+define service{
+        use                             generic-service
+        hostgroup_name                  pcs
+        service_description             Sleep Process Check
+        check_command                   check_snmp_processes!example!sleep!10
+}
+```
+
+On vérifie que la configuration est fonctionnelle :
+
+```bash
+sudo nagios4 -v /etc/nagios4/nagios.cfg
+```
+
+On redémarre le service nagios4 :
+
+```bash
+sudo systemctl restart nagios4
+```
+
+On vérifie sur l'interface si tout marche : 
+
+![alt text](image-18.png)
