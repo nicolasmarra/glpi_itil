@@ -597,13 +597,18 @@ HOST-RESOURCES-MIB::hrSystemProcesses.0 = Gauge32: 10
 ```
 
 
-## - Check SNMP dans Nagios
+## 8. Check SNMP dans Nagios
 
-Il y a deux étapes à réaliser dans cette partie.
+Cette section couvre deux étapes principales pour configurer la supervision SNMP du processus sleep dans Nagios.
 
-1- Modifier la configuration de l'agent SNMP pour qu'il détecte un processus spécifique (sleep)
+---
 
-Pour ce faire, j'ai ajouté cette tâche à mon playbook pour que l'agent soit à l'écoute sur l'adresse IP 0.0.0.0 sur le port UDP 161, la communauté "example" en lecteur et une directive proc pour le processus sleep. 
+### 8.1. Configuration de l'agent SNMP pour détecter le processus `sleep`
+
+Pour que l'agent SNMP puisse surveiller le processus `sleep`, une modification de la configuration SNMP a été intégrée dans un playbook Ansible. La tâche suivante configure l'agent pour écouter sur l'adresse IP `0.0.0.0` au port UDP `161`, définit une communauté `example` en mode lecture seule, et ajoute une directive `proc` pour surveiller le processus `sleep` :
+
+
+**Lien vers le playbook complet :** [fusioninventory.yml](/files_ops/fusioninventory.yml)
 
 ```yml
   - name: Détecter les processus sleep
@@ -617,18 +622,19 @@ Pour ce faire, j'ai ajouté cette tâche à mon playbook pour que l'agent soit �
       group: root
 ```
 
-Après avoir changé mon playbook, j'ai relancé SNMPD avec Ansible.
+Une fois la configuration modifiée, le service SNMPD a été redémarré avec Ansible :
 
 ```bash
 ansible-playbook -i script_ansible.sh fusioninventory.yml 
 ```
 
-Je vérifie que cela fonctionne  en interrogeant l'agent SNMP, avec les deux commandes suivantes :
+Pour vérifier que la configuration fonctionne, deux commandes ont été exécutées pour interroger l'agent SNMP sur la machine `pc1` :
 
 ```bash
 snmpwalk -v2c -c example pc1 UCD-SNMP-MIB::prTable
 snmptable -v2c -c example pc1 UCD-SNMP-MIB::prTable
 ```
+
 
 ```bash
 snmpwalk -v2c -c example pc1 UCD-SNMP-MIB::prTable
@@ -641,6 +647,12 @@ UCD-SNMP-MIB::prErrorFlag.1 = INTEGER: noError(0)
 UCD-SNMP-MIB::prErrMessage.1 = STRING: 
 UCD-SNMP-MIB::prErrFix.1 = INTEGER: noError(0)
 UCD-SNMP-MIB::prErrFixCmd.1 = STRING: 
+```
+
+
+En complément, la commande `snmptable` affiche une table SNMP structurée :
+
+```bash
 tprli@ops:~$ snmptable -v2c -c example pc1 UCD-SNMP-MIB::prTable
 SNMP table: UCD-SNMP-MIB::prTable
 
@@ -648,17 +660,15 @@ SNMP table: UCD-SNMP-MIB::prTable
        1   sleep     1     0       1     noError               noError
 ```
 
-![alt text](/images/image-17.png)
-
 Ces résultats montrent que la configuration est fonctionnelle. 
 
-2- Créer un service de supervision
+###  8.2. Création d’un service de supervision dans Nagios
 
-Pour cette partie, il faut créer une commande , un service et un hostgroup dans Nagios afin de vérifier le nombre d'occurence, le seuil d'alerte est de 10 occurences du processus sleep.
-Une alerte doit être déclencher artificiellement en lançant sur un pc des processus "sleep" en tâche de fond.
+L’objectif ici est de configurer un service dans Nagios pour vérifier le nombre d’occurrences du processus `sleep`. Une alerte doit se déclencher lorsque ce nombre dépasse un seuil de 10.
 
+#### - Ajout d’un hostgroup
 
-D'abord, j'ai ajouté un hostgroup dans le fichier /etc/nagios4/objects/localhost.cfg
+Dans le fichier `/etc/nagios4/objects/localhost.cfg`, un groupe d’hôtes `pcs` a été défini pour regrouper plusieurs machines supervisées :
 
 ```bash
 define hostgroup{
@@ -668,7 +678,9 @@ define hostgroup{
 }
 ```
 
-Ensuite, j'ai ajouté un service dans le même fichier :
+#### - Définition du service
+
+Dans le même fichier, un service a été ajouté pour surveiller les processus `sleep` :
 
 ```bash
 define service{
@@ -680,8 +692,10 @@ define service{
 
 ```
 
-Ensuite j'ai défini la commande check_snmp_processes sur /etc/nagios4/objects/commands.cfg
+#### - Création de la commande
 
+
+Une commande personnalisée `check-snmp-processes` a été définie dans `/etc/nagios4/objects/commands.cfg` :
 
 
 ```bash
@@ -690,28 +704,33 @@ define command{
         command_line $USER1$/check_snmp -H $HOSTADDRESS$ -C $ARG1$ -o UCD-SNMP-MIB::prCount.$ARG2$ -w $ARG3$
 }
 ```
+#### - Vérification et redémarrage**
 
-On vérifie que la configuration est fonctionnelle :
+Pour vérifier la configuration, la commande suivante a été exécutée :
 
 ```bash
 sudo nagios4 -v /etc/nagios4/nagios.cfg
 ```
 
-On redémarre le service nagios4 :
+Après vérification , le service Nagios a été redémarré :
 
 ```bash
 sudo systemctl restart nagios4
 ```
 
-On vérifie sur l'interface si tout marche : 
 
-![alt text](/images/image-18.png)
+#### - Test sur l’interface web
 
-![alt text](/images/image-19.png)
 
-Pour vérifier que tout marche bien;
+Sur l’interface Nagios, le service de supervision est disponible.
 
-j'ai lancé la commande sleep sur la machine pc1 15 fois.
+![Interface Nagios - Exemple 1](/images/image-18.png)
+![Interface Nagios - Exemple 2](/images/image-19.png)
+
+
+Pour vérifier que tout marche vraiment,  15 processus `sleep` ont été lancés en tâche de fond sur la machine `pc1` :
+
+
 
 ```bash
 for i in {1..15}; do sleep 1000 & done
@@ -732,7 +751,8 @@ for i in {1..15}; do sleep 1000 & done
 [15] 19902
 ```
 
-on a utilisé la commande snmpwaalk pour consulter sur la machine ops: 
+Une fois cela fait, une interrogation de l’agent SNMP confirme que le compteur est bien à 16 :
+
 
 ```bash
 snmpwalk -v2c -c example pc1 UCD-SNMP-MIB::prTable
@@ -746,14 +766,20 @@ UCD-SNMP-MIB::prErrMessage.1 = STRING:
 UCD-SNMP-MIB::prErrFix.1 = INTEGER: noError(0)
 UCD-SNMP-MIB::prErrFixCmd.1 = STRING:
 ```
+La variable `UCD-SNMP-MIB::prCount.1 = INTEGER: 16` montre que le compteur est à 16.
 
-On voit que le compteur est à 16
+Pour garantir un suivi en temps réel, un intervalle de vérification de 1 minute a été ajouté au service Nagios :
 
-J'ai dû changer le service et ajouter un check_interval de 1 pour que cela fasse une verification toutes les minutes.
 
-On voit donc que l'alerte a été déclenchée pour la macine pc1 
+```bash
+check_interval 1
+```
 
-![alt text](/images/image-20.png)
+Suite à ces modifications, une alerte s’est déclenchée pour la machine `pc1`, visible dans l’interface Nagios :
 
-![alt text](/images/image-21.png)
+![Alerte Nagios - Exemple 1](/images/image-20.png)
+![Alerte Nagios - Exemple 2](/images/image-21.png)
 
+--- 
+
+La supervision SNMP du processus `sleep` a été configurée  dans Nagios. 
